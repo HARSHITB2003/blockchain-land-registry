@@ -51,6 +51,19 @@ const REG_FEE_PCT = 1;
 const LEGAL_FEE = 5000;
 const BLOCKCHAIN_FEE = 99;
 const MUNICIPAL_PCT = 0.4;
+const SIMULATED_WALLET = "0x742d35Cc6634C0532925a3b844Bc9e7595f2b123";
+
+function shortAddress(addr) {
+  if (!addr) return "";
+  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+}
+
+async function sha256Hex(file) {
+  const buf = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buf);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return "0x" + hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 const STATES = Object.keys(STAMP_DUTY);
 
@@ -223,6 +236,68 @@ export default function Home() {
     { type: "benami", msg: "Property value ₹2.1Cr registered under name with no income history", block: null },
     { type: "clean", msg: "All 47 transactions in last 24 hours verified", block: null },
   ];
+  const [walletAddress, setWalletAddress] = useState("");
+  const [toast, setToast] = useState("");
+  const [documentHashes, setDocumentHashes] = useState({});
+  const [verifyResult, setVerifyResult] = useState(null);
+  const [docDragOver, setDocDragOver] = useState(false);
+
+  const connectWallet = useCallback(async () => {
+    if (typeof window === "undefined") return;
+    if (!window.ethereum) {
+      setToast("MetaMask not detected. Running in simulated mode.");
+      setWalletAddress(SIMULATED_WALLET);
+      return;
+    }
+    try {
+      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+      if (accounts?.[0]) setWalletAddress(accounts[0]);
+    } catch (err) {
+      setToast("Could not connect. Using simulated wallet.");
+      setWalletAddress(SIMULATED_WALLET);
+    }
+  }, []);
+
+  const handleDocUpload = useCallback(async (file, regId) => {
+    if (!file) return;
+    if (file.type !== "application/pdf") {
+      setToast("Only PDF files are accepted.");
+      return;
+    }
+    try {
+      const hash = await sha256Hex(file);
+      setDocumentHashes((prev) => ({ ...prev, [regId]: hash }));
+      setVerifyResult(null);
+    } catch (e) {
+      setToast("Failed to compute hash.");
+    }
+  }, []);
+
+  const handleVerifyDocument = useCallback(async (file, regId) => {
+    if (!file || !regId) return;
+    if (file.type !== "application/pdf") {
+      setToast("Only PDF files are accepted.");
+      return;
+    }
+    try {
+      const hash = await sha256Hex(file);
+      const stored = documentHashes[regId];
+      setVerifyResult(stored ? hash === stored : null);
+      if (!stored) setToast("No stored hash for this registration to compare.");
+    } catch (e) {
+      setToast("Failed to compute hash.");
+    }
+  }, [documentHashes]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(""), 4000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  useEffect(() => {
+    setVerifyResult(null);
+  }, [selectedCard?.id]);
 
   // Init chain
   useEffect(() => {
@@ -307,7 +382,20 @@ export default function Home() {
               <p className="text-xs text-teal-400/90">Bharat Bhoomi Chain · Transparent property registration</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            {walletAddress ? (
+              <div className="flex items-center gap-2 rounded-lg border border-teal-500/30 bg-teal-500/10 px-3 py-2">
+                <span className="h-2 w-2 rounded-full bg-green-500" />
+                <span className="font-mono text-sm text-teal-400">{shortAddress(walletAddress)}</span>
+              </div>
+            ) : (
+              <button
+                onClick={connectWallet}
+                className="rounded-lg border border-teal-500/50 bg-teal-500/20 px-3 py-2 text-sm font-medium text-teal-400 transition hover:bg-teal-500/30"
+              >
+                Connect Wallet
+              </button>
+            )}
             <span className="text-xs text-slate-500">Role</span>
             <select
               value={role}
@@ -321,6 +409,13 @@ export default function Home() {
             </select>
           </div>
         </div>
+        {toast && (
+          <div className="mx-auto max-w-7xl px-4 py-2">
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-400">
+              {toast}
+            </div>
+          </div>
+        )}
         <div className="border-y border-slate-800/80 bg-slate-900/50 py-1.5 overflow-hidden">
           <div className="flex w-max gap-4" style={{ animation: "scroll 30s linear infinite" }}>
             {(blocks?.length ? blocks.slice(-8) : []).map((b, i) => (
@@ -396,38 +491,82 @@ export default function Home() {
                   <p className="text-xs text-slate-500">{selectedCard.seller} → {selectedCard.buyer} · ₹ {(selectedCard.value / 1e7).toFixed(1)} Cr</p>
 
                   {selectedCard.step === 1 && (
-                    <div className="mt-4 rounded-xl border border-[#a78bfa]/30 bg-[#a78bfa]/5 p-4">
-                      <div className="flex items-center gap-2">
-                        <span className="text-lg">🤖</span>
-                        <h4 className="text-sm font-semibold text-[#a78bfa]">AI Document Verification</h4>
-                        <span className="rounded bg-[#a78bfa]/20 px-1.5 py-0.5 text-[10px] text-[#a78bfa]">AI-Powered</span>
-                      </div>
-                      {!docVerifyDone ? (
-                        <>
-                          <p className="mt-2 flex items-center gap-2 text-sm text-slate-300">🤖 AI Analyzing Documents...</p>
-                          <div className="mt-2 flex gap-1">
-                            <div className="h-2 w-2 rounded-full bg-[#a78bfa] animate-pulse" />
-                            <div className="h-2 w-2 rounded-full bg-[#a78bfa] animate-pulse" style={{ animationDelay: "0.2s" }} />
-                            <div className="h-2 w-2 rounded-full bg-[#a78bfa] animate-pulse" style={{ animationDelay: "0.4s" }} />
+                    <>
+                      <div className="mt-4 rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
+                        <h4 className="text-sm font-semibold text-teal-400">Property document upload (PDF)</h4>
+                        <div
+                          className={`mt-2 rounded-xl border-2 border-dashed p-6 text-center transition ${docDragOver ? "border-teal-500 bg-teal-500/10" : "border-slate-600 bg-slate-800/50"}`}
+                          onDragOver={(e) => { e.preventDefault(); setDocDragOver(true); }}
+                          onDragLeave={() => setDocDragOver(false)}
+                          onDrop={(e) => { e.preventDefault(); setDocDragOver(false); const f = e.dataTransfer?.files?.[0]; if (f) handleDocUpload(f, selectedCard.id); }}
+                        >
+                          <p className="text-sm text-slate-400">Drag and drop PDF here, or click to choose</p>
+                          <input
+                            type="file"
+                            accept="application/pdf"
+                            className="hidden"
+                            id="doc-upload"
+                            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleDocUpload(f, selectedCard.id); e.target.value = ""; }}
+                          />
+                          <label htmlFor="doc-upload" className="mt-2 inline-block cursor-pointer rounded-lg border border-teal-500/50 bg-teal-500/20 px-3 py-2 text-xs font-medium text-teal-400 hover:bg-teal-500/30">Choose PDF</label>
+                        </div>
+                        {documentHashes[selectedCard.id] && (
+                          <div className="mt-3 rounded-lg border border-green-500/20 bg-green-500/5 p-3">
+                            <p className="font-mono text-xs text-slate-300 break-all">Document Hash: {documentHashes[selectedCard.id]}</p>
+                            <p className="mt-1 text-xs text-green-400">✅ Document hash stored on blockchain – tamper-proof</p>
                           </div>
-                          <button onClick={() => setDocVerifyDone(true)} className="mt-3 rounded-lg bg-[#a78bfa]/20 px-3 py-1.5 text-xs font-medium text-[#a78bfa] hover:bg-[#a78bfa]/30">Simulate complete</button>
-                        </>
-                      ) : (
-                        <>
-                          <ul className="mt-2 space-y-1.5 text-xs">
-                            <li className="text-green-400">Aadhaar: ✅ Verified (99.2% confidence)</li>
-                            <li className="text-green-400">Sale Deed: ✅ Format valid</li>
-                            <li className="text-green-400">Encumbrance Certificate: ✅ No liens detected</li>
-                            <li className="text-green-400">PAN: ✅ Matched with Income Tax records</li>
-                          </ul>
-                          <p className="mt-2 text-[10px] text-slate-500">AI processed 6 documents in 4.2 seconds · Traditional manual check: 3–5 days</p>
-                          <div className="mt-2 rounded border border-slate-700 bg-slate-800/80 p-2 font-mono text-[10px] text-slate-400">[Document preview with highlighted fields: Name, DOB, Address ✓]</div>
-                        </>
-                      )}
-                    </div>
+                        )}
+                        <div className="mt-3 flex items-center gap-2">
+                          <input
+                            type="file"
+                            accept="application/pdf"
+                            id="verify-upload"
+                            className="hidden"
+                            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleVerifyDocument(f, selectedCard.id); e.target.value = ""; }}
+                          />
+                          <label htmlFor="verify-upload" className="cursor-pointer rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-700">Verify document</label>
+                          <span className="text-xs text-slate-500">Upload a PDF to check if hash matches chain</span>
+                        </div>
+                        {verifyResult !== null && (
+                          <p className={`mt-2 text-sm ${verifyResult ? "text-green-400" : "text-red-400"}`}>{verifyResult ? "✅ Hash matches – document is authentic" : "❌ Hash does not match – document may be altered"}</p>
+                        )}
+                      </div>
+                      <div className="mt-4 rounded-xl border border-[#a78bfa]/30 bg-[#a78bfa]/5 p-4">
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">🤖</span>
+                          <h4 className="text-sm font-semibold text-[#a78bfa]">AI Document Verification</h4>
+                          <span className="rounded bg-[#a78bfa]/20 px-1.5 py-0.5 text-[10px] text-[#a78bfa]">AI-Powered</span>
+                        </div>
+                        {!docVerifyDone ? (
+                          <>
+                            <p className="mt-2 flex items-center gap-2 text-sm text-slate-300">🤖 AI Analyzing Documents...</p>
+                            <div className="mt-2 flex gap-1">
+                              <div className="h-2 w-2 rounded-full bg-[#a78bfa] animate-pulse" />
+                              <div className="h-2 w-2 rounded-full bg-[#a78bfa] animate-pulse" style={{ animationDelay: "0.2s" }} />
+                              <div className="h-2 w-2 rounded-full bg-[#a78bfa] animate-pulse" style={{ animationDelay: "0.4s" }} />
+                            </div>
+                            <button onClick={() => setDocVerifyDone(true)} className="mt-3 rounded-lg bg-[#a78bfa]/20 px-3 py-1.5 text-xs font-medium text-[#a78bfa] hover:bg-[#a78bfa]/30">Simulate complete</button>
+                          </>
+                        ) : (
+                          <>
+                            <ul className="mt-2 space-y-1.5 text-xs">
+                              <li className="text-green-400">Aadhaar: ✅ Verified (99.2% confidence)</li>
+                              <li className="text-green-400">Sale Deed: ✅ Format valid</li>
+                              <li className="text-green-400">Encumbrance Certificate: ✅ No liens detected</li>
+                              <li className="text-green-400">PAN: ✅ Matched with Income Tax records</li>
+                            </ul>
+                            <p className="mt-2 text-[10px] text-slate-500">AI processed 6 documents in 4.2 seconds · Traditional manual check: 3–5 days</p>
+                            <div className="mt-2 rounded border border-slate-700 bg-slate-800/80 p-2 font-mono text-[10px] text-slate-400">[Document preview with highlighted fields: Name, DOB, Address ✓]</div>
+                          </>
+                        )}
+                      </div>
+                    </>
                   )}
 
                   <h4 className="mt-4 text-xs font-semibold text-teal-400">Blockchain transaction trail</h4>
+                  {documentHashes[selectedCard?.id] && (
+                    <p className="mt-1 font-mono text-[10px] text-slate-400">Document hash on chain: {documentHashes[selectedCard.id]}</p>
+                  )}
                   <ul className="mt-2 space-y-2">
                     {cardBlocks.length ? cardBlocks.map((b) => (
                       <li key={b.hash} className="rounded-lg border border-slate-700/50 bg-slate-800/50 p-2 font-mono text-[10px]">
